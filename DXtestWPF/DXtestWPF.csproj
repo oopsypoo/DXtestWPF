@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <CubeShaderSource>$(MSBuildThisFileDirectory)Shaders\TexturedCubeShader.md</CubeShaderSource>
+    <CubeShaderOutputDir>$(TargetDir)Shaders\</CubeShaderOutputDir>
+    <FxcPath Condition="'$(FxcPath)' == '' and '$(WindowsSdkVerBinPath)' != '' and Exists('$(WindowsSdkVerBinPath)x64\fxc.exe')">$(WindowsSdkVerBinPath)x64\fxc.exe</FxcPath>
+    <FxcPath Condition="'$(FxcPath)' == '' and '$(WindowsSdkDir)' != '' and '$(WindowsSDKVersion)' != '' and Exists('$(WindowsSdkDir)bin\$(WindowsSDKVersion)x64\fxc.exe')">$(WindowsSdkDir)bin\$(WindowsSDKVersion)x64\fxc.exe</FxcPath>
+  </PropertyGroup>
+<PropertyGroup>
+  <FxcPath>C:\Program Files (x86)\Windows Kits\10\bin\10.0.28000.0\x64\fxc.exe</FxcPath>
+</PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.HLSL.CSharpVB" Version="1.0.2" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.*" />
+    <PackageReference Include="Vortice.DXGI" Version="3.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Assets\world.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="CompileCubeShaders" AfterTargets="Build" Inputs="$(CubeShaderSource)" Outputs="$(CubeShaderOutputDir)TexturedCubeVS.cso;$(CubeShaderOutputDir)TexturedCubePS.cso">
+    <Error Condition="!Exists('$(CubeShaderSource)')" Text="Missing shader source file '$(CubeShaderSource)'." />
+    <Error Condition="'$(FxcPath)' == ''" Text="Could not locate fxc.exe. Install the Windows SDK HLSL tools or set the FxcPath MSBuild property." />
+    <MakeDir Directories="$(CubeShaderOutputDir)" />
+    <Exec Command="&quot;$(FxcPath)&quot; /nologo /T vs_5_0 /E VSMain /Fo &quot;$(CubeShaderOutputDir)TexturedCubeVS.cso&quot; &quot;$(CubeShaderSource)&quot;" />
+    <Exec Command="&quot;$(FxcPath)&quot; /nologo /T ps_5_0 /E PSMain /Fo &quot;$(CubeShaderOutputDir)TexturedCubePS.cso&quot; &quot;$(CubeShaderSource)&quot;" />
+  </Target>
+
+</Project>

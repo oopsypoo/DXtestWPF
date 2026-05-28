@@ -1,0 +1,66 @@
+<Window x:Class="DXtestWPF.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="DXtestWPF - Diagnostics Launcher"
+        Height="860"
+        Width="1220"
+        Background="#1E1E1E"
+        Foreground="White">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="2*" />
+            <RowDefinition Height="2*" />
+            <RowDefinition Height="2*" />
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,12">
+            <TextBlock DockPanel.Dock="Left"
+                       Text="WPF launcher for hardware diagnostics and a DirectX 11 sample"
+                       VerticalAlignment="Center"
+                       FontSize="18"
+                       FontWeight="SemiBold"
+                       Margin="0,0,16,0" />
+
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="Refresh"
+                        Padding="16,8"
+                        Margin="0,0,8,0"
+                        Click="Refresh_Click" />
+                <Button Content="Start DirectX 11 Demo"
+                        Padding="16,8"
+                        Click="StartDemo_Click" />
+            </StackPanel>
+        </DockPanel>
+
+        <GroupBox Grid.Row="1" Header="System summary" Margin="0,0,0,12">
+            <ListBox x:Name="SummaryList"
+                     Background="#2D2D2D"
+                     Foreground="White"
+                     BorderThickness="0"
+                     FontFamily="Consolas"
+                     FontSize="13" />
+        </GroupBox>
+
+        <GroupBox Grid.Row="2" Header="Display information" Margin="0,0,0,12">
+            <ListBox x:Name="DisplayList"
+                     Background="#2D2D2D"
+                     Foreground="White"
+                     BorderThickness="0"
+                     FontFamily="Consolas"
+                     FontSize="13" />
+        </GroupBox>
+
+        <GroupBox Grid.Row="3" Header="Direct3D information">
+            <ListBox x:Name="Direct3DList"
+                     Background="#2D2D2D"
+                     Foreground="White"
+                     BorderThickness="0"
+                     FontFamily="Consolas"
+                     FontSize="13" />
+        </GroupBox>
+    </Grid>
+</Window>
