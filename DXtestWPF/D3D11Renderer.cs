@@ -49,7 +49,8 @@ internal sealed class D3D11Renderer : IDisposable
 
     public void Render()
     {
-        if (_context is null || _swapChain is null || _renderTargetView is null || _depthStencilView is null)
+        if (_context is null || _swapChain is null || _textureView is null
+            || _renderTargetView is null || _depthStencilView is null)
         {
             return;
         }
@@ -65,14 +66,12 @@ internal sealed class D3D11Renderer : IDisposable
 
         UpdateConstantBuffer(worldViewProjection);
 
-        _context.ClearRenderTargetView(_renderTargetView, clearColor);
-        _context.ClearDepthStencilView(_depthStencilView, DepthStencilClearFlags.Depth, 1.0f, 0);
-
-        _context.OMSetRenderTargets(_renderTargetView, _depthStencilView);
-        _context.OMSetDepthStencilState(_depthStencilState);
-
         _context.RSSetViewport(_viewport);
         _context.RSSetState(_rasterizerState);
+        _context.OMSetDepthStencilState(_depthStencilState);
+        _context.OMSetRenderTargets(_renderTargetView, _depthStencilView);
+        _context.ClearRenderTargetView(_renderTargetView, clearColor);
+        _context.ClearDepthStencilView(_depthStencilView, DepthStencilClearFlags.Depth, 1.0f, 0);
 
         _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
         _context.IASetInputLayout(_inputLayout);
@@ -104,21 +103,13 @@ internal sealed class D3D11Renderer : IDisposable
 
     private void InitializeDeviceAndSwapChain()
     {
-        FeatureLevel[] featureLevels =
-        {
-            FeatureLevel.Level_11_1,
-            FeatureLevel.Level_11_0,
-            FeatureLevel.Level_10_1,
-            FeatureLevel.Level_10_0
-        };
-
         try
         {
             D3D11.D3D11CreateDevice(
                 null,
                 DriverType.Hardware,
                 DeviceCreationFlags.BgraSupport,
-                featureLevels,
+                D3DHelper.FeatureLevels,
                 out _device,
                 out _featureLevel,
                 out _context).CheckError();
@@ -129,16 +120,19 @@ internal sealed class D3D11Renderer : IDisposable
                 null,
                 DriverType.Warp,
                 DeviceCreationFlags.BgraSupport,
-                featureLevels,
+                D3DHelper.FeatureLevels,
                 out _device,
                 out _featureLevel,
                 out _context).CheckError();
         }
 
-        _shaderModel = GetEstimatedShaderModel(_featureLevel);
+        _shaderModel = D3DHelper.EstimatedShaderModel(_featureLevel);
 
         using IDXGIFactory4 factory = DXGI.CreateDXGIFactory2<IDXGIFactory4>(false);
 
+        // Swap chain is intentionally created at 1x1. The correct size is
+        // applied immediately after construction via an explicit Resize() call
+        // in Dx11RenderHost.BuildWindowCore, before the render thread starts.
         SwapChainDescription1 swapChainDescription = new()
         {
             Width = 1,
@@ -160,7 +154,7 @@ internal sealed class D3D11Renderer : IDisposable
     }
 
     private void CreateTargetResources(int width, int height)
-    {   
+    {
         if (_device is null || _swapChain is null)
         {
             return;
@@ -168,7 +162,29 @@ internal sealed class D3D11Renderer : IDisposable
 
         using ID3D11Texture2D backBuffer = _swapChain.GetBuffer<ID3D11Texture2D>(0);
         _renderTargetView = _device.CreateRenderTargetView(backBuffer);
-        
+        DepthStencilDescription stencilDescription = new()
+        {
+            DepthEnable = true,
+            DepthWriteMask = DepthWriteMask.All,
+            DepthFunc = ComparisonFunction.Less,
+            StencilEnable = false,
+            StencilReadMask = 0xFF,
+            StencilWriteMask = 0xFF,
+            FrontFace = new DepthStencilOperationDescription
+            {
+                StencilFailOp = StencilOperation.Keep,
+                StencilDepthFailOp = StencilOperation.Keep,
+                StencilPassOp = StencilOperation.Keep,
+                StencilFunc = ComparisonFunction.Always
+            },
+            BackFace = new DepthStencilOperationDescription
+            {
+                StencilFailOp = StencilOperation.Keep,
+                StencilDepthFailOp = StencilOperation.Keep,
+                StencilPassOp = StencilOperation.Keep,
+                StencilFunc = ComparisonFunction.Always
+            }
+        };
 
         Texture2DDescription depthDescription = new()
         {
@@ -186,7 +202,7 @@ internal sealed class D3D11Renderer : IDisposable
 
         _depthStencilBuffer = _device.CreateTexture2D(depthDescription);
         _depthStencilView = _device.CreateDepthStencilView(_depthStencilBuffer);
-        
+        _depthStencilState = _device.CreateDepthStencilState(stencilDescription);
         _viewport = new Viewport(0, 0, width, height, 0, 1);
     }
 
@@ -232,35 +248,12 @@ internal sealed class D3D11Renderer : IDisposable
             MaxAnisotropy = 8
         });
 
-        DepthStencilDescription stencilDescription = new()
-        {
-            DepthEnable = true,
-            DepthWriteMask = DepthWriteMask.All,
-            DepthFunc = ComparisonFunction.Less,
-            StencilEnable = false,
-            StencilReadMask = 0xFF,
-            StencilWriteMask = 0xFF,
-            FrontFace = new DepthStencilOperationDescription
-            {
-                StencilFailOp = StencilOperation.Keep,
-                StencilDepthFailOp = StencilOperation.Keep,
-                StencilPassOp = StencilOperation.Keep,
-                StencilFunc = ComparisonFunction.Always
-            },
-            BackFace = new DepthStencilOperationDescription
-            {
-                StencilFailOp = StencilOperation.Keep,
-                StencilDepthFailOp = StencilOperation.Keep,
-                StencilPassOp = StencilOperation.Keep,
-                StencilFunc = ComparisonFunction.Always
-            }
-        };
         _rasterizerState = _device.CreateRasterizerState(new RasterizerDescription
         {
-            CullMode = CullMode.Back,
+            CullMode = CullMode.Front,
             FillMode = FillMode.Solid,
             DepthClipEnable = true,
-            FrontCounterClockwise = true,
+            FrontCounterClockwise = false,
             MultisampleEnable = false,
             ScissorEnable = false,
             AntialiasedLineEnable = false,
@@ -268,7 +261,7 @@ internal sealed class D3D11Renderer : IDisposable
             DepthBiasClamp = 0,
             SlopeScaledDepthBias = 0
         });
-        _depthStencilState = _device.CreateDepthStencilState(stencilDescription);
+
         _textureView = LoadTextureView();
     }
 
@@ -356,34 +349,49 @@ internal sealed class D3D11Renderer : IDisposable
 
     private ID3D11ShaderResourceView CreateTextureViewFromPixels(byte[] pixels, int width, int height, int stride)
     {
-        if (_device is null)
+        if (_device is null || _context is null)
         {
             throw new InvalidOperationException("Direct3D device is not initialized.");
         }
 
+        ID3D11Device device = _device;
+        ID3D11DeviceContext context = _context;
+
+        // MipLevels = 0 tells D3D to allocate the full mip chain (log2 of the
+        // largest dimension + 1 levels). Usage must be Default and BindFlags
+        // must include RenderTarget so D3D can render into the smaller levels
+        // when GenerateMips is called.
         Texture2DDescription textureDescription = new()
         {
             Width = (uint)width,
             Height = (uint)height,
-            MipLevels = 1,
+            MipLevels = 0,
             ArraySize = 1,
             Format = Format.B8G8R8A8_UNorm,
             SampleDescription = new SampleDescription(1, 0),
-            Usage = ResourceUsage.Immutable,
-            BindFlags = BindFlags.ShaderResource,
+            Usage = ResourceUsage.Default,
+            BindFlags = BindFlags.ShaderResource | BindFlags.RenderTarget,
             CPUAccessFlags = CpuAccessFlags.None,
-            MiscFlags = ResourceOptionFlags.None
+            MiscFlags = ResourceOptionFlags.GenerateMips
         };
+
+        // Create the texture with no initial data — passing subresource data
+        // alongside MipLevels=0 is invalid because D3D doesn't yet know the
+        // total mip count. Instead we upload mip 0 via UpdateSubresource and
+        // then let GenerateMips fill the rest.
+        using ID3D11Texture2D texture = device.CreateTexture2D(textureDescription);
+        ID3D11ShaderResourceView view = device.CreateShaderResourceView(texture);
 
         unsafe
         {
             fixed (byte* pixelsPointer = pixels)
             {
-                SubresourceData subresource = new((IntPtr)pixelsPointer, (uint)stride, 0);
-                using ID3D11Texture2D texture = _device.CreateTexture2D(textureDescription, new[] { subresource });
-                return _device.CreateShaderResourceView(texture);
+                context.UpdateSubresource(texture, 0, null, (IntPtr)pixelsPointer, (uint)stride, 0);
             }
         }
+
+        context.GenerateMips(view);
+        return view;
     }
 
     private static string? ResolveTexturePath()
@@ -439,21 +447,6 @@ internal sealed class D3D11Renderer : IDisposable
         };
 
         return candidates.FirstOrDefault(File.Exists);
-    }
-
-    private static string GetEstimatedShaderModel(FeatureLevel featureLevel)
-    {
-        return featureLevel switch
-        {
-            FeatureLevel.Level_11_1 => "5.0",
-            FeatureLevel.Level_11_0 => "5.0",
-            FeatureLevel.Level_10_1 => "4.1",
-            FeatureLevel.Level_10_0 => "4.0",
-            FeatureLevel.Level_9_3 => "3.0",
-            FeatureLevel.Level_9_2 => "2.0",
-            FeatureLevel.Level_9_1 => "2.0",
-            _ => "Unknown",
-        };
     }
 
     private static CubeGeometry CreateCubeGeometry()
@@ -525,7 +518,6 @@ internal sealed class D3D11Renderer : IDisposable
     public void Dispose()
     {
         _textureView?.Dispose();
-        _depthStencilState?.Dispose();
         _rasterizerState?.Dispose();
         _samplerState?.Dispose();
         _constantBuffer?.Dispose();
@@ -539,7 +531,6 @@ internal sealed class D3D11Renderer : IDisposable
         _context?.Dispose();
         _device?.Dispose();
         _textureView = null;
-        _depthStencilState = null;
         _rasterizerState = null;
         _samplerState = null;
         _constantBuffer = null;
@@ -568,33 +559,4 @@ internal sealed class D3D11Renderer : IDisposable
         public static readonly int SizeInBytes = Marshal.SizeOf<Vertex>();
     }
 
-    private static RECT GetClientRect(IntPtr hwnd)
-    {
-        if (!GetClientRect(hwnd, out RECT rect))
-        {
-            return new RECT(0, 0, 1, 1);
-        }
-
-        return rect;
-    }
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RECT
-    {
-        public int Left;
-        public int Top;
-        public int Right;
-        public int Bottom;
-
-        public RECT(int left, int top, int right, int bottom)
-        {
-            Left = left;
-            Top = top;
-            Right = right;
-            Bottom = bottom;
-        }
-    }
 }

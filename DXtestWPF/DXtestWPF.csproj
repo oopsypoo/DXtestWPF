@@ -8,7 +8,7 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <CubeShaderSource>$(MSBuildThisFileDirectory)Shaders\TexturedCubeShader.md</CubeShaderSource>
+    <CubeShaderSource>$(MSBuildThisFileDirectory)Shaders\TexturedCubeShader.hlsl</CubeShaderSource>
     <CubeShaderOutputDir>$(TargetDir)Shaders\</CubeShaderOutputDir>
     <FxcPath Condition="'$(FxcPath)' == '' and '$(WindowsSdkVerBinPath)' != '' and Exists('$(WindowsSdkVerBinPath)x64\fxc.exe')">$(WindowsSdkVerBinPath)x64\fxc.exe</FxcPath>
     <FxcPath Condition="'$(FxcPath)' == '' and '$(WindowsSdkDir)' != '' and '$(WindowsSDKVersion)' != '' and Exists('$(WindowsSdkDir)bin\$(WindowsSDKVersion)x64\fxc.exe')">$(WindowsSdkDir)bin\$(WindowsSDKVersion)x64\fxc.exe</FxcPath>

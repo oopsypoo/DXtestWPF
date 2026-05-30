@@ -49,7 +49,7 @@ internal static class HardwareInfoService
         {
             $"Direct3D device path: {(probe.UsedWarpFallback ? "WARP fallback" : "Hardware")}",
             $"Feature level: {probe.FeatureLevel}",
-            $"Estimated shader model: {GetEstimatedShaderModel(probe.FeatureLevel)}",
+            $"Estimated shader model: {D3DHelper.EstimatedShaderModel(probe.FeatureLevel)}",
             "Shader model estimate is based on feature level, not a full HLSL compiler test.",
         };
     }
@@ -91,73 +91,17 @@ internal static class HardwareInfoService
 
     private static Direct3DProbeResult ProbeDirect3D()
     {
-        var featureLevels = new[]
-        {
-            FeatureLevel.Level_11_1,
-            FeatureLevel.Level_11_0,
-            FeatureLevel.Level_10_1,
-            FeatureLevel.Level_10_0,
-            FeatureLevel.Level_9_3,
-            FeatureLevel.Level_9_2,
-            FeatureLevel.Level_9_1,
-        };
-
-        if (TryCreateDevice(DriverType.Hardware, featureLevels, out var featureLevel))
+        if (D3DHelper.TryCreateDevice(DriverType.Hardware, out var featureLevel))
         {
             return new Direct3DProbeResult(featureLevel, UsedWarpFallback: false);
         }
 
-        if (TryCreateDevice(DriverType.Warp, featureLevels, out featureLevel))
+        if (D3DHelper.TryCreateDevice(DriverType.Warp, out featureLevel))
         {
             return new Direct3DProbeResult(featureLevel, UsedWarpFallback: true);
         }
 
         return new Direct3DProbeResult(FeatureLevel.Level_9_1, UsedWarpFallback: true);
-    }
-
-    private static bool TryCreateDevice(DriverType driverType, FeatureLevel[] featureLevels, out FeatureLevel featureLevel)
-    {
-        ID3D11Device? device = null;
-        ID3D11DeviceContext? context = null;
-
-        try
-        {
-            D3D11.D3D11CreateDevice(
-                null,
-                driverType,
-                DeviceCreationFlags.BgraSupport,
-                featureLevels,
-                out device,
-                out featureLevel,
-                out context).CheckError();
-
-            return true;
-        }
-        catch
-        {
-            featureLevel = default;
-            return false;
-        }
-        finally
-        {
-            context?.Dispose();
-            device?.Dispose();
-        }
-    }
-
-    private static string GetEstimatedShaderModel(FeatureLevel featureLevel)
-    {
-        return featureLevel switch
-        {
-            FeatureLevel.Level_11_1 => "5.0",
-            FeatureLevel.Level_11_0 => "5.0",
-            FeatureLevel.Level_10_1 => "4.1",
-            FeatureLevel.Level_10_0 => "4.0",
-            FeatureLevel.Level_9_3 => "3.0",
-            FeatureLevel.Level_9_2 => "2.0",
-            FeatureLevel.Level_9_1 => "2.0",
-            _ => "Unknown",
-        };
     }
 
     private readonly record struct Direct3DProbeResult(FeatureLevel FeatureLevel, bool UsedWarpFallback);
