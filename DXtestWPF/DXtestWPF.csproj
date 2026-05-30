@@ -17,6 +17,7 @@
   <FxcPath>C:\Program Files (x86)\Windows Kits\10\bin\10.0.28000.0\x64\fxc.exe</FxcPath>
 </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Vortice.Direct2D1" Version="3.8.3" />
     <PackageReference Include="Vortice.Direct3D11" Version="3.*" />
     <PackageReference Include="Vortice.DXGI" Version="3.*" />
   </ItemGroup>

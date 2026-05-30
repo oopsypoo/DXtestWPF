@@ -36,6 +36,7 @@ internal sealed class D3D11Renderer : IDisposable
     private string _shaderModel = "Unknown";
     private Viewport _viewport;
     private int _indexCount;
+    private D2DTextOverlay? _overlay;
 
     public D3D11Renderer(IntPtr hwnd)
     {
@@ -49,8 +50,7 @@ internal sealed class D3D11Renderer : IDisposable
 
     public void Render()
     {
-        if (_context is null || _swapChain is null || _textureView is null
-            || _renderTargetView is null || _depthStencilView is null)
+        if (_context is null || _swapChain is null || _renderTargetView is null || _depthStencilView is null)
         {
             return;
         }
@@ -85,6 +85,10 @@ internal sealed class D3D11Renderer : IDisposable
         _context.PSSetSampler(0, _samplerState);
 
         _context.DrawIndexed((uint)_indexCount, 0, 0);
+
+        // Draw the HUD overlay on top of the 3D scene before presenting.
+        _overlay?.Render();
+
         _swapChain.Present(1, PresentFlags.None);
     }
 
@@ -95,10 +99,17 @@ internal sealed class D3D11Renderer : IDisposable
             return;
         }
 
+        // Release ALL back buffer references before ResizeBuffers.
+        // This includes the D2D render target inside the overlay, which holds
+        // an internal reference to the swap chain surface.
+        _overlay?.ReleaseRenderTarget();
         ReleaseTargetResources();
 
         _swapChain.ResizeBuffers(0, width, height, Format.B8G8R8A8_UNorm, SwapChainFlags.None).CheckError();
+
+        // Recreate everything now that the new back buffer exists.
         CreateTargetResources((int)width, (int)height);
+        _overlay?.RecreateRenderTarget();
     }
 
     private void InitializeDeviceAndSwapChain()
@@ -151,6 +162,7 @@ internal sealed class D3D11Renderer : IDisposable
         _swapChain = factory.CreateSwapChainForHwnd(_device, _hwnd, swapChainDescription, null, null);
 
         CreatePipelineResources();
+        _overlay = new D2DTextOverlay(_swapChain);
     }
 
     private void CreateTargetResources(int width, int height)
@@ -517,6 +529,8 @@ internal sealed class D3D11Renderer : IDisposable
 
     public void Dispose()
     {
+        _overlay?.Dispose();
+        _overlay = null;
         _textureView?.Dispose();
         _rasterizerState?.Dispose();
         _samplerState?.Dispose();
