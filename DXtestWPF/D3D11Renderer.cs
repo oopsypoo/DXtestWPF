@@ -3,6 +3,7 @@ using System.IO;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
@@ -22,6 +23,7 @@ internal sealed class D3D11Renderer : IDisposable
     private ID3D11RenderTargetView? _renderTargetView;
     private ID3D11Texture2D? _depthStencilBuffer;
     private ID3D11DepthStencilView? _depthStencilView;
+    private ID3D11DepthStencilState? _depthStencilState;
     private ID3D11VertexShader? _vertexShader;
     private ID3D11PixelShader? _pixelShader;
     private ID3D11InputLayout? _inputLayout;
@@ -64,11 +66,14 @@ internal sealed class D3D11Renderer : IDisposable
 
         UpdateConstantBuffer(worldViewProjection);
 
-        _context.RSSetViewport(_viewport);
-        _context.RSSetState(_rasterizerState);
-        _context.OMSetRenderTargets(_renderTargetView, _depthStencilView);
         _context.ClearRenderTargetView(_renderTargetView, clearColor);
         _context.ClearDepthStencilView(_depthStencilView, DepthStencilClearFlags.Depth, 1.0f, 0);
+
+        _context.OMSetRenderTargets(_renderTargetView, _depthStencilView);
+        _context.OMSetDepthStencilState(_depthStencilState);
+
+        _context.RSSetViewport(_viewport);
+        _context.RSSetState(_rasterizerState);
 
         _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
         _context.IASetInputLayout(_inputLayout);
@@ -169,6 +174,7 @@ internal sealed class D3D11Renderer : IDisposable
 
         using ID3D11Texture2D backBuffer = _swapChain.GetBuffer<ID3D11Texture2D>(0);
         _renderTargetView = _device.CreateRenderTargetView(backBuffer);
+        
 
         Texture2DDescription depthDescription = new()
         {
@@ -186,6 +192,7 @@ internal sealed class D3D11Renderer : IDisposable
 
         _depthStencilBuffer = _device.CreateTexture2D(depthDescription);
         _depthStencilView = _device.CreateDepthStencilView(_depthStencilBuffer);
+        
         _viewport = new Viewport(0, 0, width, height, 0, 1);
     }
 
@@ -231,12 +238,35 @@ internal sealed class D3D11Renderer : IDisposable
             MaxAnisotropy = 8
         });
 
+        DepthStencilDescription stencilDescription = new()
+        {
+            DepthEnable = true,
+            DepthWriteMask = DepthWriteMask.All,
+            DepthFunc = ComparisonFunction.Less,
+            StencilEnable = false,
+            StencilReadMask = 0xFF,
+            StencilWriteMask = 0xFF,
+            FrontFace = new DepthStencilOperationDescription
+            {
+                StencilFailOp = StencilOperation.Keep,
+                StencilDepthFailOp = StencilOperation.Keep,
+                StencilPassOp = StencilOperation.Keep,
+                StencilFunc = ComparisonFunction.Always
+            },
+            BackFace = new DepthStencilOperationDescription
+            {
+                StencilFailOp = StencilOperation.Keep,
+                StencilDepthFailOp = StencilOperation.Keep,
+                StencilPassOp = StencilOperation.Keep,
+                StencilFunc = ComparisonFunction.Always
+            }
+        };
         _rasterizerState = _device.CreateRasterizerState(new RasterizerDescription
         {
-            CullMode = CullMode.None,
+            CullMode = CullMode.Back,
             FillMode = FillMode.Solid,
             DepthClipEnable = true,
-            FrontCounterClockwise = false,
+            FrontCounterClockwise = true,
             MultisampleEnable = false,
             ScissorEnable = false,
             AntialiasedLineEnable = false,
@@ -244,7 +274,7 @@ internal sealed class D3D11Renderer : IDisposable
             DepthBiasClamp = 0,
             SlopeScaledDepthBias = 0
         });
-
+        _depthStencilState = _device.CreateDepthStencilState(stencilDescription);
         _textureView = LoadTextureView();
     }
 
@@ -501,6 +531,7 @@ internal sealed class D3D11Renderer : IDisposable
     public void Dispose()
     {
         _textureView?.Dispose();
+        _depthStencilState?.Dispose();
         _rasterizerState?.Dispose();
         _samplerState?.Dispose();
         _constantBuffer?.Dispose();
@@ -514,6 +545,7 @@ internal sealed class D3D11Renderer : IDisposable
         _context?.Dispose();
         _device?.Dispose();
         _textureView = null;
+        _depthStencilState = null;
         _rasterizerState = null;
         _samplerState = null;
         _constantBuffer = null;
