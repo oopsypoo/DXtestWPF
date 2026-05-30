@@ -3,7 +3,6 @@ using System.IO;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Windows.Media;
-using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
@@ -140,14 +139,10 @@ internal sealed class D3D11Renderer : IDisposable
 
         using IDXGIFactory4 factory = DXGI.CreateDXGIFactory2<IDXGIFactory4>(false);
 
-        RECT clientRect = GetClientRect(_hwnd);
-        int width = Math.Max(1, clientRect.Right - clientRect.Left);
-        int height = Math.Max(1, clientRect.Bottom - clientRect.Top);
-
         SwapChainDescription1 swapChainDescription = new()
         {
-            Width = (uint)width,
-            Height = (uint)height,
+            Width = 1,
+            Height = 1,
             Format = Format.B8G8R8A8_UNorm,
             Stereo = false,
             SampleDescription = new SampleDescription(1, 0),
@@ -161,12 +156,11 @@ internal sealed class D3D11Renderer : IDisposable
 
         _swapChain = factory.CreateSwapChainForHwnd(_device, _hwnd, swapChainDescription, null, null);
 
-        CreateTargetResources(width, height);
         CreatePipelineResources();
     }
 
     private void CreateTargetResources(int width, int height)
-    {
+    {   
         if (_device is null || _swapChain is null)
         {
             return;

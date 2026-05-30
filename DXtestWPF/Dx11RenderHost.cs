@@ -45,6 +45,12 @@ public sealed class Dx11RenderHost : HwndHost
         }
 
         _renderer = new D3D11Renderer(_childWindow);
+        // Apply the correct size immediately — the swap chain is created at
+        // 1x1 inside D3D11Renderer; this sets the real size before the
+        // render thread starts so the first frame is never at the wrong size.
+        var width = (uint)Math.Max(1, (int)Math.Round(RenderSize.Width));
+        var height = (uint)Math.Max(1, (int)Math.Round(RenderSize.Height));
+        _renderer.Resize(width, height);
         StartRenderThread();
         return new HandleRef(this, _childWindow);
     }
