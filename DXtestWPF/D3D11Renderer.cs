@@ -99,7 +99,7 @@ internal sealed class D3D11Renderer : IDisposable
 
         Matrix4x4 worldViewProjection = Matrix4x4.Transpose(world * view * projection);
 
-        UpdateConstantBuffer(worldViewProjection);
+        UpdateConstantBuffer(worldViewProjection, Matrix4x4.Transpose(world));
 
         // --- Draw --------------------------------------------------------
         _context.RSSetViewport(_viewport);
@@ -117,6 +117,7 @@ internal sealed class D3D11Renderer : IDisposable
         _context.VSSetShader(_vertexShader);
         _context.VSSetConstantBuffer(0, _constantBuffer);
         _context.PSSetShader(_pixelShader);
+        _context.PSSetConstantBuffer(0, _constantBuffer); 
         _context.PSSetShaderResource(0, _textureView);
         _context.PSSetSampler(0, _samplerState);
 
@@ -266,7 +267,8 @@ internal sealed class D3D11Renderer : IDisposable
             new[]
             {
                 new InputElementDescription("POSITION", 0, Format.R32G32B32_Float, 0, 0),
-                new InputElementDescription("TEXCOORD", 0, Format.R32G32_Float, 12, 0),
+                new InputElementDescription("NORMAL",   0, Format.R32G32B32_Float, 12, 0), // Normal starts at byte 12
+                new InputElementDescription("TEXCOORD", 0, Format.R32G32_Float, 24, 0),   // TexCoord pushed to byte 24
             },
             vertexShaderBytecode);
 
@@ -443,20 +445,21 @@ internal sealed class D3D11Renderer : IDisposable
         return candidates.FirstOrDefault(File.Exists);
     }
 
-    private void UpdateConstantBuffer(Matrix4x4 worldViewProjection)
+    private void UpdateConstantBuffer(Matrix4x4 worldViewProjection, Matrix4x4 world)
     {
-        if (_context is null || _constantBuffer is null)
-        {
-            return;
-        }
+        if (_context is null || _constantBuffer is null) return;
 
         TransformConstants constants = new()
         {
-            WorldViewProjection = worldViewProjection
+            WorldViewProjection = worldViewProjection,
+            World = world,
+            // Light shining down and to the left, towards the cube
+            LightDirection = new Vector3(1.0f, 1.0f, -1.0f),
+            // 20% base ambient light so the dark side is visible
+            AmbientLight = 0.2f
         };
 
-        MappedSubresource mapped = _context.Map(
-            _constantBuffer, 0, MapMode.WriteDiscard, Vortice.Direct3D11.MapFlags.None);
+        MappedSubresource mapped = _context.Map(_constantBuffer, 0, MapMode.WriteDiscard, Vortice.Direct3D11.MapFlags.None);
         Marshal.StructureToPtr(constants, mapped.DataPointer, false);
         _context.Unmap(_constantBuffer, 0);
     }
@@ -492,49 +495,57 @@ internal sealed class D3D11Renderer : IDisposable
     {
         const float h = 1.6f;
 
+        // Define which way each face points
+        Vector3 nFront = new Vector3(0, 0, -1);
+        Vector3 nBack = new Vector3(0, 0, 1);
+        Vector3 nLeft = new Vector3(-1, 0, 0);
+        Vector3 nRight = new Vector3(1, 0, 0);
+        Vector3 nTop = new Vector3(0, 1, 0);
+        Vector3 nBottom = new Vector3(0, -1, 0);
+
         Vertex[] vertices =
         {
-            // Front
-            new(new Vector3(-h, -h, -h), new Vector2(0, 1)),
-            new(new Vector3(-h,  h, -h), new Vector2(0, 0)),
-            new(new Vector3( h,  h, -h), new Vector2(1, 0)),
-            new(new Vector3( h, -h, -h), new Vector2(1, 1)),
+        // Front
+            new(new Vector3(-h, -h, -h), nFront, new Vector2(0, 1)),
+            new(new Vector3(-h,  h, -h), nFront, new Vector2(0, 0)),
+            new(new Vector3( h,  h, -h), nFront, new Vector2(1, 0)),
+            new(new Vector3( h, -h, -h), nFront, new Vector2(1, 1)),
             // Back
-            new(new Vector3( h, -h,  h), new Vector2(0, 1)),
-            new(new Vector3( h,  h,  h), new Vector2(0, 0)),
-            new(new Vector3(-h,  h,  h), new Vector2(1, 0)),
-            new(new Vector3(-h, -h,  h), new Vector2(1, 1)),
+            new(new Vector3( h, -h,  h), nBack, new Vector2(0, 1)),
+            new(new Vector3( h,  h,  h), nBack, new Vector2(0, 0)),
+            new(new Vector3(-h,  h,  h), nBack, new Vector2(1, 0)),
+            new(new Vector3(-h, -h,  h), nBack, new Vector2(1, 1)),
             // Left
-            new(new Vector3(-h, -h,  h), new Vector2(0, 1)),
-            new(new Vector3(-h,  h,  h), new Vector2(0, 0)),
-            new(new Vector3(-h,  h, -h), new Vector2(1, 0)),
-            new(new Vector3(-h, -h, -h), new Vector2(1, 1)),
+            new(new Vector3(-h, -h,  h), nLeft, new Vector2(0, 1)),
+            new(new Vector3(-h,  h,  h), nLeft, new Vector2(0, 0)),
+            new(new Vector3(-h,  h, -h), nLeft, new Vector2(1, 0)),
+            new(new Vector3(-h, -h, -h), nLeft, new Vector2(1, 1)),
             // Right
-            new(new Vector3( h, -h, -h), new Vector2(0, 1)),
-            new(new Vector3( h,  h, -h), new Vector2(0, 0)),
-            new(new Vector3( h,  h,  h), new Vector2(1, 0)),
-            new(new Vector3( h, -h,  h), new Vector2(1, 1)),
+            new(new Vector3( h, -h, -h), nRight, new Vector2(0, 1)),
+            new(new Vector3( h,  h, -h), nRight, new Vector2(0, 0)),
+            new(new Vector3( h,  h,  h), nRight, new Vector2(1, 0)),
+            new(new Vector3( h, -h,  h), nRight, new Vector2(1, 1)),
             // Top
-            new(new Vector3(-h,  h, -h), new Vector2(0, 1)),
-            new(new Vector3(-h,  h,  h), new Vector2(0, 0)),
-            new(new Vector3( h,  h,  h), new Vector2(1, 0)),
-            new(new Vector3( h,  h, -h), new Vector2(1, 1)),
+            new(new Vector3(-h,  h, -h), nTop, new Vector2(0, 1)),
+            new(new Vector3(-h,  h,  h), nTop, new Vector2(0, 0)),
+            new(new Vector3( h,  h,  h), nTop, new Vector2(1, 0)),
+            new(new Vector3( h,  h, -h), nTop, new Vector2(1, 1)),
             // Bottom
-            new(new Vector3(-h, -h,  h), new Vector2(0, 1)),
-            new(new Vector3(-h, -h, -h), new Vector2(0, 0)),
-            new(new Vector3( h, -h, -h), new Vector2(1, 0)),
-            new(new Vector3( h, -h,  h), new Vector2(1, 1)),
+            new(new Vector3(-h, -h,  h), nBottom, new Vector2(0, 1)),
+            new(new Vector3(-h, -h, -h), nBottom, new Vector2(0, 0)),
+            new(new Vector3( h, -h, -h), nBottom, new Vector2(1, 0)),
+            new(new Vector3( h, -h,  h), nBottom, new Vector2(1, 1)),
         };
 
         ushort[] indices =
         {
-             0,  1,  2,  0,  2,  3,
-             4,  5,  6,  4,  6,  7,
-             8,  9, 10,  8, 10, 11,
-            12, 13, 14, 12, 14, 15,
-            16, 17, 18, 16, 18, 19,
-            20, 21, 22, 20, 22, 23,
-        };
+         0,  1,  2,  0,  2,  3,
+         4,  5,  6,  4,  6,  7,
+         8,  9, 10,  8, 10, 11,
+        12, 13, 14, 12, 14, 15,
+        16, 17, 18, 16, 18, 19,
+        20, 21, 22, 20, 22, 23,
+    };
 
         return new CubeGeometry(vertices, indices);
     }
@@ -587,10 +598,13 @@ internal sealed class D3D11Renderer : IDisposable
     private struct TransformConstants
     {
         public Matrix4x4 WorldViewProjection;
+        public Matrix4x4 World;
+        public Vector3 LightDirection;
+        public float AmbientLight;
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct Vertex(Vector3 Position, Vector2 TexCoord)
+    private readonly record struct Vertex(Vector3 Position, Vector3 Normal, Vector2 TexCoord)
     {
         public static readonly int SizeInBytes = Marshal.SizeOf<Vertex>();
     }
