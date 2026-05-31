@@ -66,7 +66,8 @@ internal sealed class D3D11Renderer : IDisposable
 
     public void Render()
     {
-        if (_context is null || _swapChain is null || _renderTargetView is null || _depthStencilView is null)
+        if (_context is null || _swapChain is null || _textureView is null
+            || _renderTargetView is null || _depthStencilView is null)
         {
             return;
         }

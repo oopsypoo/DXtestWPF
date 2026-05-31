@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using System.Windows;
-using System.Windows.Input;
 using System.Windows.Interop;
 
 namespace DXtestWPF;
@@ -112,12 +111,6 @@ public sealed class Dx11RenderHost : HwndHost
 
         return base.WndProc(hwnd, msg, wParam, lParam, ref handled);
     }
-
-    /// <summary>
-    /// Prevents HwndHost's default tab-focus behaviour from pulling focus
-    /// into the child HWND via the WPF focus system.
-    /// </summary>
-    protected override bool TabInto(TraversalRequest request) => false;
 
     protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
     {
