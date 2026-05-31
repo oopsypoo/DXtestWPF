@@ -72,7 +72,8 @@ internal sealed class D3D11Renderer : IDisposable
 
     public void Render()
     {
-        if (_context is null || _swapChain is null || _cubeTextureView is null || _floorTextureView is null
+        if (_context is null || _swapChain is null || _floorVertexBuffer is null || _floorIndexBuffer is null
+            || _cubeTextureView is null || _floorTextureView is null
             || _renderTargetView is null || _depthStencilView is null)
         {
             return;
@@ -82,67 +83,79 @@ internal sealed class D3D11Renderer : IDisposable
         double now = Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
         float deltaTime = (float)(now - _lastFrameTime);
         _lastFrameTime = now;
-
-        // Clamp delta so a stalled frame doesn't teleport the camera.
         deltaTime = Math.Clamp(deltaTime, 0.0f, 0.1f);
 
         // --- Update camera -----------------------------------------------
         Camera.Update(deltaTime);
 
-        // --- Build matrices ----------------------------------------------
-        float timeSeconds = (float)_clock.Elapsed.TotalSeconds;
+        // =================================================================
+        // 1. CLEAR AND SET PIPELINE STATE FIRST
+        // =================================================================
         Color4 clearColor = new(0.07f, 0.09f, 0.14f, 1.0f);
 
-        Matrix4x4 world = Matrix4x4.CreateRotationY(timeSeconds * 0.85f)
-                        * Matrix4x4.CreateRotationX(timeSeconds * 0.55f);
-
-        // Use the camera's live view matrix instead of the hardcoded LookAt.
-        Matrix4x4 view = Camera.ViewMatrix;
-
-        float aspectRatio = Math.Max(1.0f, _viewport.Width / Math.Max(1.0f, _viewport.Height));
-        Matrix4x4 projection = Matrix4x4.CreatePerspectiveFieldOfView(
-            MathF.PI / 4.0f, aspectRatio, 0.1f, 100.0f);
-
-        Matrix4x4 worldViewProjection = Matrix4x4.Transpose(world * view * projection);
-
-        UpdateConstantBuffer(worldViewProjection, Matrix4x4.Transpose(world),0);
-
-        // ---DRAW FLOOR-- -
-        Matrix4x4 floorWorld = Matrix4x4.Identity;
-        // Pass '1' to turn ON the normal mapping and atlas math
-        UpdateConstantBuffer(worldViewProjection, Matrix4x4.Transpose(floorWorld), 1);
-
-        // Bind the FLOOR texture
-        _context.PSSetShaderResource(0, _floorTextureView);
-
-        _context.IASetVertexBuffer(0, _floorVertexBuffer!, (uint)Vertex.SizeInBytes);
-        _context.IASetIndexBuffer(_floorIndexBuffer, Format.R16_UInt, 0);
-        _context.DrawIndexed(6, 0, 0);
-        // --- Draw --------------------------------------------------------
         _context.RSSetViewport(_viewport);
         _context.RSSetState(_rasterizerState);
         _context.OMSetDepthStencilState(_depthStencilState);
         _context.OMSetRenderTargets(_renderTargetView, _depthStencilView);
+
+        // Clear the screen BEFORE drawing anything!
         _context.ClearRenderTargetView(_renderTargetView, clearColor);
         _context.ClearDepthStencilView(_depthStencilView, DepthStencilClearFlags.Depth, 1.0f, 0);
 
+        // Bind shaders, layouts, and topology (These apply to both objects)
         _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
         _context.IASetInputLayout(_inputLayout);
-        _context.IASetVertexBuffer(0, _vertexBuffer!, (uint)Vertex.SizeInBytes, 0);
-        _context.IASetIndexBuffer(_indexBuffer!, Format.R16_UInt, 0);
-
         _context.VSSetShader(_vertexShader);
-        _context.VSSetConstantBuffer(0, _constantBuffer);
         _context.PSSetShader(_pixelShader);
-        _context.PSSetConstantBuffer(0, _constantBuffer); 
-        _context.PSSetShaderResource(0, _cubeTextureView);
         _context.PSSetSampler(0, _samplerState);
 
+        // Bind constant buffer to shaders
+        _context.VSSetConstantBuffer(0, _constantBuffer);
+        _context.PSSetConstantBuffer(0, _constantBuffer);
+
+        // Calculate ViewProjection once (shared by both objects)
+        Matrix4x4 view = Camera.ViewMatrix;
+        float aspectRatio = Math.Max(1.0f, _viewport.Width / Math.Max(1.0f, _viewport.Height));
+        Matrix4x4 projection = Matrix4x4.CreatePerspectiveFieldOfView(MathF.PI / 4.0f, aspectRatio, 0.1f, 100.0f);
+        Matrix4x4 viewProjection = view * projection;
+
+        // =================================================================
+        // 2. DRAW FLOOR
+        // =================================================================
+        Matrix4x4 floorWorld = Matrix4x4.Identity;
+        // Calculate the floor's specific WorldViewProjection
+        Matrix4x4 floorWVP = Matrix4x4.Transpose(floorWorld * viewProjection);
+
+        // Pass '1' for floor normal mapping
+        UpdateConstantBuffer(floorWVP, Matrix4x4.Transpose(floorWorld), 1);
+
+        _context.PSSetShaderResource(0, _floorTextureView);
+        _context.IASetVertexBuffer(0, _floorVertexBuffer, (uint)Vertex.SizeInBytes, 0);
+        _context.IASetIndexBuffer(_floorIndexBuffer, Format.R16_UInt, 0);
+        _context.DrawIndexed(6, 0, 0);
+
+        // =================================================================
+        // 3. DRAW CUBE
+        // =================================================================
+        float timeSeconds = (float)_clock.Elapsed.TotalSeconds;
+        Matrix4x4 cubeWorld = Matrix4x4.CreateRotationY(timeSeconds * 0.85f) * Matrix4x4.CreateRotationX(timeSeconds * 0.55f);
+        // Calculate the cube's specific WorldViewProjection
+        Matrix4x4 cubeWVP = Matrix4x4.Transpose(cubeWorld * viewProjection);
+
+        // Pass '0' for standard cube texture
+        UpdateConstantBuffer(cubeWVP, Matrix4x4.Transpose(cubeWorld), 0);
+
+        _context.PSSetShaderResource(0, _cubeTextureView);
+        // Note: I assume _vertexBuffer is still your cube's vertex buffer. 
+        // If you renamed it to _cubeVertexBuffer, change it here!
+        _context.IASetVertexBuffer(0, _vertexBuffer!, (uint)Vertex.SizeInBytes, 0);
+        _context.IASetIndexBuffer(_indexBuffer!, Format.R16_UInt, 0);
         _context.DrawIndexed((uint)_indexCount, 0, 0);
 
-        // Draw the HUD overlay on top of the 3D scene before presenting.
+        // =================================================================
+        // 4. OVERLAY & PRESENT
+        // =================================================================
         _overlay?.Render();
-
         _swapChain.Present(1, PresentFlags.None);
     }
 
@@ -295,6 +308,10 @@ internal sealed class D3D11Renderer : IDisposable
 
         _vertexBuffer = _device.CreateBuffer(cube.Vertices, BindFlags.VertexBuffer);
         _indexBuffer = _device.CreateBuffer(cube.Indices, BindFlags.IndexBuffer);
+        //floor geometry is created separately since it has different vertices and indices than the cube, but it uses the same vertex structure and thus can reuse the same shaders and input layout.
+        var floorGeo = CreatePlaneGeometry();
+        _floorVertexBuffer = _device.CreateBuffer(floorGeo.Vertices, BindFlags.VertexBuffer);
+        _floorIndexBuffer = _device.CreateBuffer(floorGeo.Indices, BindFlags.IndexBuffer);
 
         _constantBuffer = _device.CreateBuffer(
             new BufferDescription(

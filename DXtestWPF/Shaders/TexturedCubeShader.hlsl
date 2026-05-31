@@ -50,6 +50,11 @@ float4 PSMain(VSOutput input) : SV_Target
     if (UseNormalMap == 1)
     {
         float2 wrappedUV = frac(input.TexCoord);
+        // Shift Y down by 0.5 to look at the Bottom-Left (Metal Color)
+        //float2 diffuseUV = (wrappedUV * 0.5f) + float2(0.0f, 0.5f); 
+
+        // Shift X over by 0.5 and Y down by 0.5 to look at the Bottom-Right (Metal Normal Map)
+        //float2 normalUV  = (wrappedUV * 0.5f) + float2(0.5f, 0.5f);
         float2 diffuseUV = wrappedUV * 0.5f; 
         float2 normalUV  = (wrappedUV * 0.5f) + float2(0.5f, 0.0f);
 
