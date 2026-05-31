@@ -4,10 +4,12 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using Vortice.Direct2D1.Effects;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
 using Vortice.Mathematics;
+using BitmapSource = System.Windows.Media.Imaging.BitmapSource;
 
 namespace DXtestWPF;
 
@@ -28,9 +30,12 @@ internal sealed class D3D11Renderer : IDisposable
     private ID3D11InputLayout? _inputLayout;
     private ID3D11Buffer? _vertexBuffer;
     private ID3D11Buffer? _indexBuffer;
+    private ID3D11Buffer? _floorVertexBuffer;
+    private ID3D11Buffer? _floorIndexBuffer;
     private ID3D11Buffer? _constantBuffer;
     private ID3D11SamplerState? _samplerState;
-    private ID3D11ShaderResourceView? _textureView;
+    private ID3D11ShaderResourceView? _cubeTextureView; //texture for the cube
+    private ID3D11ShaderResourceView? _floorTextureView; //texture for the floor (if you decide to render it)
     private ID3D11RasterizerState? _rasterizerState;
     private FeatureLevel _featureLevel;
     private string _shaderModel = "Unknown";
@@ -52,6 +57,7 @@ internal sealed class D3D11Renderer : IDisposable
 
     // Timing for the per-frame delta used by Camera.Update.
     private double _lastFrameTime;
+    
 
     public D3D11Renderer(IntPtr hwnd)
     {
@@ -66,7 +72,7 @@ internal sealed class D3D11Renderer : IDisposable
 
     public void Render()
     {
-        if (_context is null || _swapChain is null || _textureView is null
+        if (_context is null || _swapChain is null || _cubeTextureView is null || _floorTextureView is null
             || _renderTargetView is null || _depthStencilView is null)
         {
             return;
@@ -99,8 +105,19 @@ internal sealed class D3D11Renderer : IDisposable
 
         Matrix4x4 worldViewProjection = Matrix4x4.Transpose(world * view * projection);
 
-        UpdateConstantBuffer(worldViewProjection, Matrix4x4.Transpose(world));
+        UpdateConstantBuffer(worldViewProjection, Matrix4x4.Transpose(world),0);
 
+        // ---DRAW FLOOR-- -
+        Matrix4x4 floorWorld = Matrix4x4.Identity;
+        // Pass '1' to turn ON the normal mapping and atlas math
+        UpdateConstantBuffer(worldViewProjection, Matrix4x4.Transpose(floorWorld), 1);
+
+        // Bind the FLOOR texture
+        _context.PSSetShaderResource(0, _floorTextureView);
+
+        _context.IASetVertexBuffer(0, _floorVertexBuffer!, (uint)Vertex.SizeInBytes);
+        _context.IASetIndexBuffer(_floorIndexBuffer, Format.R16_UInt, 0);
+        _context.DrawIndexed(6, 0, 0);
         // --- Draw --------------------------------------------------------
         _context.RSSetViewport(_viewport);
         _context.RSSetState(_rasterizerState);
@@ -118,7 +135,7 @@ internal sealed class D3D11Renderer : IDisposable
         _context.VSSetConstantBuffer(0, _constantBuffer);
         _context.PSSetShader(_pixelShader);
         _context.PSSetConstantBuffer(0, _constantBuffer); 
-        _context.PSSetShaderResource(0, _textureView);
+        _context.PSSetShaderResource(0, _cubeTextureView);
         _context.PSSetSampler(0, _samplerState);
 
         _context.DrawIndexed((uint)_indexCount, 0, 0);
@@ -268,7 +285,8 @@ internal sealed class D3D11Renderer : IDisposable
             {
                 new InputElementDescription("POSITION", 0, Format.R32G32B32_Float, 0, 0),
                 new InputElementDescription("NORMAL",   0, Format.R32G32B32_Float, 12, 0), // Normal starts at byte 12
-                new InputElementDescription("TEXCOORD", 0, Format.R32G32_Float, 24, 0),   // TexCoord pushed to byte 24
+                new InputElementDescription("TANGENT",  0, Format.R32G32B32_Float, 24, 0),
+                new InputElementDescription("TEXCOORD", 0, Format.R32G32_Float, 36, 0),   // TexCoord pushed to byte 36
             },
             vertexShaderBytecode);
 
@@ -310,18 +328,19 @@ internal sealed class D3D11Renderer : IDisposable
             DepthBiasClamp = 0,
             SlopeScaledDepthBias = 0
         });
-
-        _textureView = LoadTextureView();
+        
+        _cubeTextureView = LoadTextureView("world.png");
+        _floorTextureView = LoadTextureView("flooring-xz-plane.png");
     }
 
-    private ID3D11ShaderResourceView LoadTextureView()
+    private ID3D11ShaderResourceView LoadTextureView(string fileName)
     {
         if (_device is null)
         {
             throw new InvalidOperationException("Direct3D device is not initialized.");
         }
 
-        string? texturePath = ResolveTexturePath();
+        string? texturePath = ResolveTexturePath(fileName);
         if (texturePath is not null)
         {
             try
@@ -433,19 +452,19 @@ internal sealed class D3D11Renderer : IDisposable
         return view;
     }
 
-    private static string? ResolveTexturePath()
+    private static string? ResolveTexturePath(string fileName)
     {
         string[] candidates =
         {
-            Path.Combine(AppContext.BaseDirectory, "Assets", "world.png"),
-            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "Assets", "world.png"),
-            Path.Combine(Directory.GetCurrentDirectory(), "Assets", "world.png"),
-        };
+        Path.Combine(AppContext.BaseDirectory, "Assets", fileName),
+        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "Assets", fileName),
+        Path.Combine(Directory.GetCurrentDirectory(), "Assets", fileName),
+    };
 
         return candidates.FirstOrDefault(File.Exists);
     }
 
-    private void UpdateConstantBuffer(Matrix4x4 worldViewProjection, Matrix4x4 world)
+    private void UpdateConstantBuffer(Matrix4x4 worldViewProjection, Matrix4x4 world, uint useNormalMap)
     {
         if (_context is null || _constantBuffer is null) return;
 
@@ -453,10 +472,10 @@ internal sealed class D3D11Renderer : IDisposable
         {
             WorldViewProjection = worldViewProjection,
             World = world,
-            // Light shining down and to the left, towards the cube
             LightDirection = new Vector3(1.0f, 1.0f, -1.0f),
-            // 20% base ambient light so the dark side is visible
-            AmbientLight = 0.2f
+            AmbientLight = 0.2f,
+            UseNormalMap = useNormalMap, // Pass the toggle here
+            Padding = Vector3.Zero       // Just empty bytes to keep the GPU happy
         };
 
         MappedSubresource mapped = _context.Map(_constantBuffer, 0, MapMode.WriteDiscard, Vortice.Direct3D11.MapFlags.None);
@@ -503,38 +522,46 @@ internal sealed class D3D11Renderer : IDisposable
         Vector3 nTop = new Vector3(0, 1, 0);
         Vector3 nBottom = new Vector3(0, -1, 0);
 
+        // (Keep your nFront, nBack, etc. definitions)
+        Vector3 tFront = new Vector3(1, 0, 0);
+        Vector3 tBack = new Vector3(-1, 0, 0);
+        Vector3 tLeft = new Vector3(0, 0, -1);
+        Vector3 tRight = new Vector3(0, 0, 1);
+        Vector3 tTop = new Vector3(1, 0, 0);
+        Vector3 tBottom = new Vector3(1, 0, 0);
+
         Vertex[] vertices =
         {
-        // Front
-            new(new Vector3(-h, -h, -h), nFront, new Vector2(0, 1)),
-            new(new Vector3(-h,  h, -h), nFront, new Vector2(0, 0)),
-            new(new Vector3( h,  h, -h), nFront, new Vector2(1, 0)),
-            new(new Vector3( h, -h, -h), nFront, new Vector2(1, 1)),
+            // Front
+            new(new Vector3(-h, -h, -h), nFront, tFront, new Vector2(0, 1)),
+            new(new Vector3(-h,  h, -h), nFront, tFront, new Vector2(0, 0)),
+            new(new Vector3( h,  h, -h), nFront, tFront, new Vector2(1, 0)),
+            new(new Vector3( h, -h, -h), nFront, tFront, new Vector2(1, 1)),
             // Back
-            new(new Vector3( h, -h,  h), nBack, new Vector2(0, 1)),
-            new(new Vector3( h,  h,  h), nBack, new Vector2(0, 0)),
-            new(new Vector3(-h,  h,  h), nBack, new Vector2(1, 0)),
-            new(new Vector3(-h, -h,  h), nBack, new Vector2(1, 1)),
+            new(new Vector3( h, -h,  h), nBack, tBack, new Vector2(0, 1)),
+            new(new Vector3( h,  h,  h), nBack, tBack, new Vector2(0, 0)),
+            new(new Vector3(-h,  h,  h), nBack, tBack, new Vector2(1, 0)),
+            new(new Vector3(-h, -h,  h), nBack, tBack, new Vector2(1, 1)),
             // Left
-            new(new Vector3(-h, -h,  h), nLeft, new Vector2(0, 1)),
-            new(new Vector3(-h,  h,  h), nLeft, new Vector2(0, 0)),
-            new(new Vector3(-h,  h, -h), nLeft, new Vector2(1, 0)),
-            new(new Vector3(-h, -h, -h), nLeft, new Vector2(1, 1)),
+            new(new Vector3(-h, -h,  h), nLeft, tLeft, new Vector2(0, 1)),
+            new(new Vector3(-h,  h,  h), nLeft, tLeft, new Vector2(0, 0)),
+            new(new Vector3(-h,  h, -h), nLeft, tLeft, new Vector2(1, 0)),
+            new(new Vector3(-h, -h, -h), nLeft, tLeft, new Vector2(1, 1)),
             // Right
-            new(new Vector3( h, -h, -h), nRight, new Vector2(0, 1)),
-            new(new Vector3( h,  h, -h), nRight, new Vector2(0, 0)),
-            new(new Vector3( h,  h,  h), nRight, new Vector2(1, 0)),
-            new(new Vector3( h, -h,  h), nRight, new Vector2(1, 1)),
+            new(new Vector3( h, -h, -h), nRight, tRight, new Vector2(0, 1)),
+            new(new Vector3( h,  h, -h), nRight, tRight, new Vector2(0, 0)),
+            new(new Vector3( h,  h,  h), nRight, tRight, new Vector2(1, 0)),
+            new(new Vector3( h, -h,  h), nRight, tRight, new Vector2(1, 1)),
             // Top
-            new(new Vector3(-h,  h, -h), nTop, new Vector2(0, 1)),
-            new(new Vector3(-h,  h,  h), nTop, new Vector2(0, 0)),
-            new(new Vector3( h,  h,  h), nTop, new Vector2(1, 0)),
-            new(new Vector3( h,  h, -h), nTop, new Vector2(1, 1)),
+            new(new Vector3(-h,  h, -h), nTop, tTop, new Vector2(0, 1)),
+            new(new Vector3(-h,  h,  h), nTop, tTop, new Vector2(0, 0)),
+            new(new Vector3( h,  h,  h), nTop, tTop, new Vector2(1, 0)),
+            new(new Vector3( h,  h, -h), nTop, tTop, new Vector2(1, 1)),
             // Bottom
-            new(new Vector3(-h, -h,  h), nBottom, new Vector2(0, 1)),
-            new(new Vector3(-h, -h, -h), nBottom, new Vector2(0, 0)),
-            new(new Vector3( h, -h, -h), nBottom, new Vector2(1, 0)),
-            new(new Vector3( h, -h,  h), nBottom, new Vector2(1, 1)),
+            new(new Vector3(-h, -h,  h), nBottom, tBottom, new Vector2(0, 1)),
+            new(new Vector3(-h, -h, -h), nBottom, tBottom, new Vector2(0, 0)),
+            new(new Vector3( h, -h, -h), nBottom, tBottom, new Vector2(1, 0)),
+            new(new Vector3( h, -h,  h), nBottom, tBottom, new Vector2(1, 1)),
         };
 
         ushort[] indices =
@@ -549,7 +576,27 @@ internal sealed class D3D11Renderer : IDisposable
 
         return new CubeGeometry(vertices, indices);
     }
+    private static (Vertex[] Vertices, ushort[] Indices) CreatePlaneGeometry()
+    {
+        const float size = 10.0f;
+        const float y = -2.0f;
 
+        Vector3 normal = new Vector3(0, 1, 0); // Pointing Up
+        Vector3 tangent = new Vector3(1, 0, 0); // Pointing Right (Along the X axis)
+
+        const float t = 5.0f; // Tile 5 times
+
+        Vertex[] vertices =
+        {
+        new(new Vector3(-size, y,  size), normal, tangent, new Vector2(0, 0)),
+        new(new Vector3( size, y,  size), normal, tangent, new Vector2(t, 0)),
+        new(new Vector3( size, y, -size), normal, tangent, new Vector2(t, t)),
+        new(new Vector3(-size, y, -size), normal, tangent, new Vector2(0, t)),
+    };
+
+        ushort[] indices = { 0, 1, 2, 0, 2, 3 };
+        return (vertices, indices);
+    }
     private void ReleaseTargetResources()
     {
         _depthStencilView?.Dispose();
@@ -564,7 +611,10 @@ internal sealed class D3D11Renderer : IDisposable
     {
         _overlay?.Dispose();
         _overlay = null;
-        _textureView?.Dispose();
+        _cubeTextureView?.Dispose();
+        _floorTextureView?.Dispose();
+        _floorVertexBuffer?.Dispose();
+        _floorIndexBuffer?.Dispose();
         _rasterizerState?.Dispose();
         _samplerState?.Dispose();
         _constantBuffer?.Dispose();
@@ -577,7 +627,10 @@ internal sealed class D3D11Renderer : IDisposable
         _swapChain?.Dispose();
         _context?.Dispose();
         _device?.Dispose();
-        _textureView = null;
+        _cubeTextureView = null;
+        _floorTextureView = null;
+        _floorVertexBuffer = null;
+        _floorIndexBuffer = null;
         _rasterizerState = null;
         _samplerState = null;
         _constantBuffer = null;
@@ -601,10 +654,12 @@ internal sealed class D3D11Renderer : IDisposable
         public Matrix4x4 World;
         public Vector3 LightDirection;
         public float AmbientLight;
+        public uint UseNormalMap; // 1 = Floor (Atlas/Normals), 0 = Cube (Standard)
+        public Vector3 Padding;   // Required for 16-byte HLSL alignment
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct Vertex(Vector3 Position, Vector3 Normal, Vector2 TexCoord)
+    private readonly record struct Vertex(Vector3 Position, Vector3 Normal, Vector3 Tangent, Vector2 TexCoord)
     {
         public static readonly int SizeInBytes = Marshal.SizeOf<Vertex>();
     }
