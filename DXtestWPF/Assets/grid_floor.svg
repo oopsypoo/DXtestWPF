@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2c3138"/>
+      <stop offset="50%" stop-color="#252a31"/>
+      <stop offset="100%" stop-color="#1f2329"/>
+    </linearGradient>
+
+    <pattern id="smallGrid" width="64" height="64" patternUnits="userSpaceOnUse">
+      <rect width="64" height="64" fill="none"/>
+      <path d="M 64 0 L 0 0 0 64" fill="none" stroke="#3b424c" stroke-width="1"/>
+    </pattern>
+
+    <pattern id="bigGrid" width="256" height="256" patternUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="none"/>
+      <path d="M 256 0 L 0 0 0 256" fill="none" stroke="#586270" stroke-width="2"/>
+      <circle cx="0" cy="0" r="3" fill="#6e7a8a"/>
+    </pattern>
+
+    <filter id="noise">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feComponentTransfer>
+        <feFuncA type="table" tableValues="0 0.05"/>
+      </feComponentTransfer>
+    </filter>
+
+    <radialGradient id="vignette" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="70%" stop-color="#000000" stop-opacity="0.00"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.18"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#smallGrid)"/>
+  <rect width="1024" height="1024" fill="url(#bigGrid)"/>
+
+  <!-- subtle panel details -->
+  <g opacity="0.18" stroke="#7c8796" stroke-width="1" fill="none">
+    <rect x="96" y="96" width="320" height="192"/>
+    <rect x="608" y="128" width="256" height="160"/>
+    <rect x="160" y="576" width="224" height="224"/>
+    <rect x="544" y="608" width="352" height="256"/>
+    <line x1="256" y1="96" x2="256" y2="288"/>
+    <line x1="736" y1="128" x2="736" y2="288"/>
+    <line x1="160" y1="688" x2="384" y2="688"/>
+    <line x1="544" y1="736" x2="896" y2="736"/>
+  </g>
+
+  <!-- soft noise -->
+  <rect width="1024" height="1024" filter="url(#noise)" opacity="0.5"/>
+
+  <!-- vignette -->
+  <rect width="1024" height="1024" fill="url(#vignette)"/>
+</svg>
