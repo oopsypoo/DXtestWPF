@@ -13,6 +13,7 @@
         Foreground="White"
         Loaded="Window_Loaded"
         KeyDown="Window_KeyDown"
+        KeyUp="Window_KeyUp"
         Closed="Window_Closed">
     <Grid Background="Black">
         <local:Dx11RenderHost x:Name="RenderHost" />

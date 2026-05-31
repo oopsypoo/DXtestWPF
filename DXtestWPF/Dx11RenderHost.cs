@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Interop;
 
 namespace DXtestWPF;
@@ -12,8 +13,10 @@ public sealed class Dx11RenderHost : HwndHost
     private const int WS_CLIPCHILDREN = 0x02000000;
     private const int SWP_NOZORDER = 0x0004;
     private const int SWP_NOACTIVATE = 0x0010;
+    private const int WM_SETFOCUS = 0x0007;
 
     private IntPtr _childWindow;
+    private IntPtr _parentWindow;
     private D3D11Renderer? _renderer;
 
     // Render thread and its lifetime controls.
@@ -26,15 +29,40 @@ public sealed class Dx11RenderHost : HwndHost
     private uint _pendingHeight;
     private readonly object _resizeLock = new();
 
+    // -----------------------------------------------------------------------
+    // Camera
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Exposes the renderer's camera (e.g. for reading position in the HUD).
+    /// Null until <see cref="BuildWindowCore"/> has run.
+    /// </summary>
+    public Camera? Camera => _renderer?.Camera;
+
+    /// <summary>
+    /// Forward a key-state snapshot to the camera.
+    /// Safe to call from the UI thread at any time after construction.
+    /// </summary>
+    public void SetCameraInput(CameraInput input)
+    {
+        _renderer?.Camera.ApplyInput(input);
+    }
+
+    // -----------------------------------------------------------------------
+    // HwndHost implementation
+    // -----------------------------------------------------------------------
+
     protected override HandleRef BuildWindowCore(HandleRef hwndParent)
     {
+        _parentWindow = hwndParent.Handle;
+
         _childWindow = CreateWindowEx(
             0,
             "STATIC",
             string.Empty,
             WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
             0, 0, 1, 1,
-            hwndParent.Handle,
+            _parentWindow,
             IntPtr.Zero,
             GetModuleHandle(null),
             IntPtr.Zero);
@@ -45,12 +73,11 @@ public sealed class Dx11RenderHost : HwndHost
         }
 
         _renderer = new D3D11Renderer(_childWindow);
-        // Apply the correct size immediately — the swap chain is created at
-        // 1x1 inside D3D11Renderer; this sets the real size before the
-        // render thread starts so the first frame is never at the wrong size.
+
         var width = (uint)Math.Max(1, (int)Math.Round(RenderSize.Width));
         var height = (uint)Math.Max(1, (int)Math.Round(RenderSize.Height));
         _renderer.Resize(width, height);
+
         StartRenderThread();
         return new HandleRef(this, _childWindow);
     }
@@ -69,6 +96,29 @@ public sealed class Dx11RenderHost : HwndHost
         }
     }
 
+    /// <summary>
+    /// Intercept messages sent to the child HWND.
+    /// When the child receives WM_SETFOCUS we immediately pass focus back to
+    /// the WPF parent so all WPF KeyDown / KeyUp events keep firing normally.
+    /// </summary>
+    protected override IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == WM_SETFOCUS && _parentWindow != IntPtr.Zero)
+        {
+            SetFocus(_parentWindow);
+            handled = true;
+            return IntPtr.Zero;
+        }
+
+        return base.WndProc(hwnd, msg, wParam, lParam, ref handled);
+    }
+
+    /// <summary>
+    /// Prevents HwndHost's default tab-focus behaviour from pulling focus
+    /// into the child HWND via the WPF focus system.
+    /// </summary>
+    protected override bool TabInto(TraversalRequest request) => false;
+
     protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
     {
         base.OnRenderSizeChanged(sizeInfo);
@@ -81,9 +131,9 @@ public sealed class Dx11RenderHost : HwndHost
         var width = (uint)Math.Max(1, (int)Math.Round(sizeInfo.NewSize.Width));
         var height = (uint)Math.Max(1, (int)Math.Round(sizeInfo.NewSize.Height));
 
-        SetWindowPos(_childWindow, IntPtr.Zero, 0, 0, (int)width, (int)height, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(_childWindow, IntPtr.Zero, 0, 0,
+            (int)width, (int)height, SWP_NOZORDER | SWP_NOACTIVATE);
 
-        // Signal the render thread to resize on its next iteration.
         lock (_resizeLock)
         {
             _pendingWidth = width;
@@ -91,6 +141,10 @@ public sealed class Dx11RenderHost : HwndHost
             _resizePending = true;
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Render thread
+    // -----------------------------------------------------------------------
 
     private void StartRenderThread()
     {
@@ -114,7 +168,6 @@ public sealed class Dx11RenderHost : HwndHost
     {
         while (_renderThreadRunning)
         {
-            // Apply a pending resize before rendering the next frame.
             bool doResize;
             uint resizeWidth, resizeHeight;
 
@@ -135,16 +188,27 @@ public sealed class Dx11RenderHost : HwndHost
         }
     }
 
+    // -----------------------------------------------------------------------
+    // P/Invoke
+    // -----------------------------------------------------------------------
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern IntPtr CreateWindowEx(int dwExStyle, string lpClassName, string lpWindowName, int dwStyle,
-        int x, int y, int nWidth, int nHeight, IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
+    private static extern IntPtr CreateWindowEx(
+        int dwExStyle, string lpClassName, string lpWindowName, int dwStyle,
+        int x, int y, int nWidth, int nHeight,
+        IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool DestroyWindow(IntPtr hWnd);
 
     [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, int uFlags);
+    private static extern bool SetWindowPos(
+        IntPtr hWnd, IntPtr hWndInsertAfter,
+        int X, int Y, int cx, int cy, int uFlags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetFocus(IntPtr hWnd);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr GetModuleHandle(string? lpModuleName);

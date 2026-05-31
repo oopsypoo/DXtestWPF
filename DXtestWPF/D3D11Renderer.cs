@@ -38,9 +38,25 @@ internal sealed class D3D11Renderer : IDisposable
     private int _indexCount;
     private D2DTextOverlay? _overlay;
 
+    // -------------------------------------------------------------------
+    // Camera
+    // -------------------------------------------------------------------
+
+    /// <summary>
+    /// The camera that drives the view matrix.
+    /// Created here so the renderer owns the object lifetime; the render host
+    /// forwards input snapshots to it via <see cref="Camera.ApplyInput"/>.
+    /// Initial position matches the old hard-coded value (0, 0, -6).
+    /// </summary>
+    public Camera Camera { get; } = new Camera(new Vector3(0.0f, 0.0f, -6.0f));
+
+    // Timing for the per-frame delta used by Camera.Update.
+    private double _lastFrameTime;
+
     public D3D11Renderer(IntPtr hwnd)
     {
         _hwnd = hwnd;
+        _lastFrameTime = Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
         InitializeDeviceAndSwapChain();
     }
 
@@ -55,17 +71,36 @@ internal sealed class D3D11Renderer : IDisposable
             return;
         }
 
+        // --- Delta time --------------------------------------------------
+        double now = Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+        float deltaTime = (float)(now - _lastFrameTime);
+        _lastFrameTime = now;
+
+        // Clamp delta so a stalled frame doesn't teleport the camera.
+        deltaTime = Math.Clamp(deltaTime, 0.0f, 0.1f);
+
+        // --- Update camera -----------------------------------------------
+        Camera.Update(deltaTime);
+
+        // --- Build matrices ----------------------------------------------
         float timeSeconds = (float)_clock.Elapsed.TotalSeconds;
         Color4 clearColor = new(0.07f, 0.09f, 0.14f, 1.0f);
 
-        Matrix4x4 world = Matrix4x4.CreateRotationY(timeSeconds * 0.85f) * Matrix4x4.CreateRotationX(timeSeconds * 0.55f);
-        Matrix4x4 view = Matrix4x4.CreateLookAt(new Vector3(0.0f, 0.0f, -6.0f), Vector3.Zero, Vector3.UnitY);
+        Matrix4x4 world = Matrix4x4.CreateRotationY(timeSeconds * 0.85f)
+                        * Matrix4x4.CreateRotationX(timeSeconds * 0.55f);
+
+        // Use the camera's live view matrix instead of the hardcoded LookAt.
+        Matrix4x4 view = Camera.ViewMatrix;
+
         float aspectRatio = Math.Max(1.0f, _viewport.Width / Math.Max(1.0f, _viewport.Height));
-        Matrix4x4 projection = Matrix4x4.CreatePerspectiveFieldOfView(MathF.PI / 4.0f, aspectRatio, 0.1f, 100.0f);
+        Matrix4x4 projection = Matrix4x4.CreatePerspectiveFieldOfView(
+            MathF.PI / 4.0f, aspectRatio, 0.1f, 100.0f);
+
         Matrix4x4 worldViewProjection = Matrix4x4.Transpose(world * view * projection);
 
         UpdateConstantBuffer(worldViewProjection);
 
+        // --- Draw --------------------------------------------------------
         _context.RSSetViewport(_viewport);
         _context.RSSetState(_rasterizerState);
         _context.OMSetDepthStencilState(_depthStencilState);
@@ -100,14 +135,11 @@ internal sealed class D3D11Renderer : IDisposable
         }
 
         // Release ALL back buffer references before ResizeBuffers.
-        // This includes the D2D render target inside the overlay, which holds
-        // an internal reference to the swap chain surface.
         _overlay?.ReleaseRenderTarget();
         ReleaseTargetResources();
 
         _swapChain.ResizeBuffers(0, width, height, Format.B8G8R8A8_UNorm, SwapChainFlags.None).CheckError();
 
-        // Recreate everything now that the new back buffer exists.
         CreateTargetResources((int)width, (int)height);
         _overlay?.RecreateRenderTarget();
     }
@@ -141,9 +173,6 @@ internal sealed class D3D11Renderer : IDisposable
 
         using IDXGIFactory4 factory = DXGI.CreateDXGIFactory2<IDXGIFactory4>(false);
 
-        // Swap chain is intentionally created at 1x1. The correct size is
-        // applied immediately after construction via an explicit Resize() call
-        // in Dx11RenderHost.BuildWindowCore, before the render thread starts.
         SwapChainDescription1 swapChainDescription = new()
         {
             Width = 1,
@@ -174,6 +203,7 @@ internal sealed class D3D11Renderer : IDisposable
 
         using ID3D11Texture2D backBuffer = _swapChain.GetBuffer<ID3D11Texture2D>(0);
         _renderTargetView = _device.CreateRenderTargetView(backBuffer);
+
         DepthStencilDescription stencilDescription = new()
         {
             DepthEnable = true,
@@ -246,7 +276,11 @@ internal sealed class D3D11Renderer : IDisposable
         _indexBuffer = _device.CreateBuffer(cube.Indices, BindFlags.IndexBuffer);
 
         _constantBuffer = _device.CreateBuffer(
-            new BufferDescription((uint)Marshal.SizeOf<TransformConstants>(), BindFlags.ConstantBuffer, ResourceUsage.Dynamic, CpuAccessFlags.Write));
+            new BufferDescription(
+                (uint)Marshal.SizeOf<TransformConstants>(),
+                BindFlags.ConstantBuffer,
+                ResourceUsage.Dynamic,
+                CpuAccessFlags.Write));
 
         _samplerState = _device.CreateSamplerState(new SamplerDescription
         {
@@ -359,20 +393,14 @@ internal sealed class D3D11Renderer : IDisposable
         return CreateTextureViewFromPixels(pixels, width, height, stride);
     }
 
-    private ID3D11ShaderResourceView CreateTextureViewFromPixels(byte[] pixels, int width, int height, int stride)
+    private ID3D11ShaderResourceView CreateTextureViewFromPixels(
+        byte[] pixels, int width, int height, int stride)
     {
         if (_device is null || _context is null)
         {
             throw new InvalidOperationException("Direct3D device is not initialized.");
         }
 
-        ID3D11Device device = _device;
-        ID3D11DeviceContext context = _context;
-
-        // MipLevels = 0 tells D3D to allocate the full mip chain (log2 of the
-        // largest dimension + 1 levels). Usage must be Default and BindFlags
-        // must include RenderTarget so D3D can render into the smaller levels
-        // when GenerateMips is called.
         Texture2DDescription textureDescription = new()
         {
             Width = (uint)width,
@@ -387,22 +415,18 @@ internal sealed class D3D11Renderer : IDisposable
             MiscFlags = ResourceOptionFlags.GenerateMips
         };
 
-        // Create the texture with no initial data — passing subresource data
-        // alongside MipLevels=0 is invalid because D3D doesn't yet know the
-        // total mip count. Instead we upload mip 0 via UpdateSubresource and
-        // then let GenerateMips fill the rest.
-        using ID3D11Texture2D texture = device.CreateTexture2D(textureDescription);
-        ID3D11ShaderResourceView view = device.CreateShaderResourceView(texture);
+        using ID3D11Texture2D texture = _device.CreateTexture2D(textureDescription);
+        ID3D11ShaderResourceView view = _device.CreateShaderResourceView(texture);
 
         unsafe
         {
             fixed (byte* pixelsPointer = pixels)
             {
-                context.UpdateSubresource(texture, 0, null, (IntPtr)pixelsPointer, (uint)stride, 0);
+                _context.UpdateSubresource(texture, 0, null, (IntPtr)pixelsPointer, (uint)stride, 0);
             }
         }
 
-        context.GenerateMips(view);
+        _context.GenerateMips(view);
         return view;
     }
 
@@ -430,7 +454,8 @@ internal sealed class D3D11Renderer : IDisposable
             WorldViewProjection = worldViewProjection
         };
 
-        MappedSubresource mapped = _context.Map(_constantBuffer, 0, MapMode.WriteDiscard, Vortice.Direct3D11.MapFlags.None);
+        MappedSubresource mapped = _context.Map(
+            _constantBuffer, 0, MapMode.WriteDiscard, Vortice.Direct3D11.MapFlags.None);
         Marshal.StructureToPtr(constants, mapped.DataPointer, false);
         _context.Unmap(_constantBuffer, 0);
     }
@@ -442,7 +467,8 @@ internal sealed class D3D11Renderer : IDisposable
         {
             string expectedPath = Path.Combine(AppContext.BaseDirectory, "Shaders", fileName);
             throw new FileNotFoundException(
-                $"Could not locate compiled shader '{fileName}'. Build the project so the precompiled shader is generated at '{expectedPath}'.",
+                $"Could not locate compiled shader '{fileName}'. Build the project so the " +
+                $"precompiled shader is generated at '{expectedPath}'.",
                 expectedPath);
         }
 
@@ -463,52 +489,47 @@ internal sealed class D3D11Renderer : IDisposable
 
     private static CubeGeometry CreateCubeGeometry()
     {
-        const float cubeHalfSize = 1.6f;
+        const float h = 1.6f;
 
         Vertex[] vertices =
         {
             // Front
-            new Vertex(new Vector3(-cubeHalfSize, -cubeHalfSize, -cubeHalfSize), new Vector2(0, 1)),
-            new Vertex(new Vector3(-cubeHalfSize,  cubeHalfSize, -cubeHalfSize), new Vector2(0, 0)),
-            new Vertex(new Vector3( cubeHalfSize,  cubeHalfSize, -cubeHalfSize), new Vector2(1, 0)),
-            new Vertex(new Vector3( cubeHalfSize, -cubeHalfSize, -cubeHalfSize), new Vector2(1, 1)),
-
+            new(new Vector3(-h, -h, -h), new Vector2(0, 1)),
+            new(new Vector3(-h,  h, -h), new Vector2(0, 0)),
+            new(new Vector3( h,  h, -h), new Vector2(1, 0)),
+            new(new Vector3( h, -h, -h), new Vector2(1, 1)),
             // Back
-            new Vertex(new Vector3( cubeHalfSize, -cubeHalfSize, cubeHalfSize), new Vector2(0, 1)),
-            new Vertex(new Vector3( cubeHalfSize,  cubeHalfSize, cubeHalfSize), new Vector2(0, 0)),
-            new Vertex(new Vector3(-cubeHalfSize,  cubeHalfSize, cubeHalfSize), new Vector2(1, 0)),
-            new Vertex(new Vector3(-cubeHalfSize, -cubeHalfSize, cubeHalfSize), new Vector2(1, 1)),
-
+            new(new Vector3( h, -h,  h), new Vector2(0, 1)),
+            new(new Vector3( h,  h,  h), new Vector2(0, 0)),
+            new(new Vector3(-h,  h,  h), new Vector2(1, 0)),
+            new(new Vector3(-h, -h,  h), new Vector2(1, 1)),
             // Left
-            new Vertex(new Vector3(-cubeHalfSize, -cubeHalfSize, cubeHalfSize), new Vector2(0, 1)),
-            new Vertex(new Vector3(-cubeHalfSize,  cubeHalfSize, cubeHalfSize), new Vector2(0, 0)),
-            new Vertex(new Vector3(-cubeHalfSize,  cubeHalfSize, -cubeHalfSize), new Vector2(1, 0)),
-            new Vertex(new Vector3(-cubeHalfSize, -cubeHalfSize, -cubeHalfSize), new Vector2(1, 1)),
-
+            new(new Vector3(-h, -h,  h), new Vector2(0, 1)),
+            new(new Vector3(-h,  h,  h), new Vector2(0, 0)),
+            new(new Vector3(-h,  h, -h), new Vector2(1, 0)),
+            new(new Vector3(-h, -h, -h), new Vector2(1, 1)),
             // Right
-            new Vertex(new Vector3( cubeHalfSize, -cubeHalfSize, -cubeHalfSize), new Vector2(0, 1)),
-            new Vertex(new Vector3( cubeHalfSize,  cubeHalfSize, -cubeHalfSize), new Vector2(0, 0)),
-            new Vertex(new Vector3( cubeHalfSize,  cubeHalfSize, cubeHalfSize), new Vector2(1, 0)),
-            new Vertex(new Vector3( cubeHalfSize, -cubeHalfSize, cubeHalfSize), new Vector2(1, 1)),
-
+            new(new Vector3( h, -h, -h), new Vector2(0, 1)),
+            new(new Vector3( h,  h, -h), new Vector2(0, 0)),
+            new(new Vector3( h,  h,  h), new Vector2(1, 0)),
+            new(new Vector3( h, -h,  h), new Vector2(1, 1)),
             // Top
-            new Vertex(new Vector3(-cubeHalfSize,  cubeHalfSize, -cubeHalfSize), new Vector2(0, 1)),
-            new Vertex(new Vector3(-cubeHalfSize,  cubeHalfSize,  cubeHalfSize), new Vector2(0, 0)),
-            new Vertex(new Vector3( cubeHalfSize,  cubeHalfSize,  cubeHalfSize), new Vector2(1, 0)),
-            new Vertex(new Vector3( cubeHalfSize,  cubeHalfSize, -cubeHalfSize), new Vector2(1, 1)),
-
+            new(new Vector3(-h,  h, -h), new Vector2(0, 1)),
+            new(new Vector3(-h,  h,  h), new Vector2(0, 0)),
+            new(new Vector3( h,  h,  h), new Vector2(1, 0)),
+            new(new Vector3( h,  h, -h), new Vector2(1, 1)),
             // Bottom
-            new Vertex(new Vector3(-cubeHalfSize, -cubeHalfSize,  cubeHalfSize), new Vector2(0, 1)),
-            new Vertex(new Vector3(-cubeHalfSize, -cubeHalfSize, -cubeHalfSize), new Vector2(0, 0)),
-            new Vertex(new Vector3( cubeHalfSize, -cubeHalfSize, -cubeHalfSize), new Vector2(1, 0)),
-            new Vertex(new Vector3( cubeHalfSize, -cubeHalfSize,  cubeHalfSize), new Vector2(1, 1)),
+            new(new Vector3(-h, -h,  h), new Vector2(0, 1)),
+            new(new Vector3(-h, -h, -h), new Vector2(0, 0)),
+            new(new Vector3( h, -h, -h), new Vector2(1, 0)),
+            new(new Vector3( h, -h,  h), new Vector2(1, 1)),
         };
 
         ushort[] indices =
         {
-            0, 1, 2, 0, 2, 3,
-            4, 5, 6, 4, 6, 7,
-            8, 9, 10, 8, 10, 11,
+             0,  1,  2,  0,  2,  3,
+             4,  5,  6,  4,  6,  7,
+             8,  9, 10,  8, 10, 11,
             12, 13, 14, 12, 14, 15,
             16, 17, 18, 16, 18, 19,
             20, 21, 22, 20, 22, 23,
@@ -572,5 +593,4 @@ internal sealed class D3D11Renderer : IDisposable
     {
         public static readonly int SizeInBytes = Marshal.SizeOf<Vertex>();
     }
-
 }
